@@ -1,1 +1,1 @@
-# LM-Daily-evaporation-rate-predictor
+Utilises data supplied over a 2 year period to identify key environmental conditions influencing daily evaporation rates in Melbourne. The identified conditions (predictors) being Minimum temperature, Relative Humidity and Month of the year. Using these and linear regression modelling techniques, a predictive model was built to estimate daily evaporation rates for any given day in Melbourne.
