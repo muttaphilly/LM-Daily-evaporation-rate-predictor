@@ -1,0 +1,708 @@
+---
+title: "pcurry_a3_case_study"
+author: "P_Curry"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**Appendix**
+```{r}
+#Load packages
+library(tidyverse)
+pacman::p_load(caret)
+pacman::p_load(modelr)
+
+#Parse csv, save to variable
+file_path <- "/Users/mudaphilly/code/UoA/Data Taming/Assignment 3 - Case study/melbourne.csv"
+melb_raw <- read.csv(file_path)
+melb_raw <- as_tibble(melb_raw)
+```
+# 2.1 Tidying data
+```{r}
+# Rename columns
+melb_raw <- melb_raw %>%
+  rename(min_temp = Minimum.temperature..Deg.C.,
+         max_temp = Maximum.Temperature..Deg.C.,
+         rh_9am = X9am.relative.humidity....)
+
+# Add seperate day, month, year with mutate() and regex
+melb_raw <- melb_raw %>%
+  mutate(year = as.integer(str_extract(Date, "^\\d{4}")),
+         month = as.integer(str_extract(Date, "(?<=-)\\d{2}(?=-)")),
+         day = as.integer(str_extract(Date, "(?<=-)\\d{1,2}$")),
+         weekday = wday(as.Date(Date, format = "%Y-%m-%d"), label = TRUE)) %>%
+  select(Date, year, month, day, weekday, everything())
+```
+
+```{r}
+# More Tidying. Select bivariates, Save to new dataframe
+melb_tidy <- melb_raw %>%
+  select(Date, month, weekday, Evaporation..mm., min_temp, max_temp, rh_9am)
+# Temps to float, months to strings, Let R know month and weekday are categorical variables
+melb_tidy <- melb_tidy %>%
+  mutate(evaporation = as.numeric(Evaporation..mm.),
+         min_temp = as.numeric(min_temp),
+         max_temp = as.numeric(max_temp)) %>%
+         mutate(month = month.name[month]) %>%
+         mutate(month = factor(month)) %>%
+         mutate(weekday = factor(weekday))
+# Change evap and rainfall variable names
+melb_tidy <- melb_tidy %>%
+  select(-Evaporation..mm.)
+# Remove rows with NAs from data frame
+melb_tidy <- na.omit(melb_tidy)
+# Inspect
+head(melb_tidy)
+```
+# 2.2 Bivariate analysis
+# Predictors vs Response Relationships
+
+Assessment of Distribution:
+The data has a symmetric shape, with evaporation rates highest between November to February and at their lowest ebb between May to August (Figure 1). The spread of the data matches this trend, with a general greater spread November to February and reduced spread May through August. The number of outliers matches the trend for shape and spread. More are observed November to February, with fewer to zero May through August.
+
+The monthly median can be seen by the red dots (Figure 1). Evaporation median decreases from January to June, before increasing again through December. March and November, the months at the end and beginning of Summer, are the exception to this rule in this dataset. They can be seen to have very marginal increases and decreases respectively (Figure 1).
+
+Assessment of Significance:
+The p-value is smaller than 0.05, so we reject the null hypothesis. Adjusted R-squared is 31%. Linearity and homoscedasticity tests are moderately good (evap_l1, evap_l2). Normality trends up towards positive 2 but is otherwise quite good (evap_l3).
+```{r}
+#Evaporation and Month
+melb_tidy <- melb_tidy %>%
+ mutate(month = factor(month, levels = month.name))
+
+evap_plot <- ggplot(melb_tidy, aes(x = month, y = evaporation)) +
+  geom_boxplot() +
+  stat_summary(fun=median, geom="line", aes(group=1), color = "blue")  + 
+  stat_summary(fun=median, geom="point", color = "red") +
+  labs(title = "Figure 1. Evaporation (mm) by Month",
+       x = "Month",
+       y = "Evaporation (mm)") +
+       theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+evap_plot
+
+# Inspect relationship (can month be used to predict evaporation)
+month.lm <- lm(evaporation ~ month, data = melb_tidy)
+summary(month.lm)
+
+# Check linear relationship assumptions
+evap_l1 <- plot(month.lm, which = 1)
+evap_l2 <- plot(month.lm, which = 2)
+evap_l3 <- plot(month.lm, which = 3)
+```
+# Bivariate analysis - Evaporation vs Week Days
+As all individual weekdays are above 0.05. The anova p-value is 0.6193. Both results confirm there is no statistically significant relationship between weekdays and evaporation rates. The negative r-value (-0.004441) further confirms there is no relationship.
+
+There is no linear relationship evident in Figure 1.2.
+
+With no statistically significant relationship, weekday can be dropped as a predictor, and no further investigation conducted.
+```{r}
+# Adjust weekday factor levels 
+melb_tidy %>%
+  mutate(weekday = factor(weekday, levels = c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")))
+# Check factors
+print(levels(melb_tidy$weekday))
+# Visualise relationship 
+weekday_plot <- ggplot(melb_tidy, aes(x = weekday, y = evaporation)) +
+  geom_boxplot() +
+  stat_summary(fun=median, geom="line", aes(group=1), color = "blue")  + 
+  stat_summary(fun=median, geom="point", color = "red") +
+  labs(title = "Figure 1.2. Effects of Weekday on Evaporation (mm)",
+       x = "Weekday",
+       y = "Evaporation (mm)") +
+       theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+weekday_plot
+
+# Inspect relationship (can weekday be used to predict evaporation)
+weekday.lm <- lm(evaporation ~ weekday, data = melb_tidy)
+summary(weekday.lm)
+anova(weekday.lm)
+```
+# Bivariate analysis - Evaporation v Max Temp
+
+Assessment of Bi-variate Distribution:
+There is a strong positive linear trend from left to right evident, with the majority of max_temp results observed below 30 Degrees C (Figure 1.3). The median is 19.70 and mean is 20.87. The lower interquartile range is 16.10 and upper is 23.90, giving an IQR of 7.8. There are several outliers in the higher end of the range which are located above 35 Degrees C (Figure 1.3).
+
+Assement of Linear Regression Assumptions:
+When linear regression assumptions are tested, all 3 measures fail (maxt_l1, maxt_l2, maxt_l1). The distribution of max_temp is left skewed (maxt_distribution). When the max_temp variable is logged, the skewdness is resolved (max_temp_log_dist). Improvements are also noted in normality(maxt_log_l1) and homoscadasticity (maxt_log_l3 )
+
+Assessment of Significance:
+With the p-value below 0.05, there is a statistically strong relationship between max_temp and evaporation. The r-squared value suggests the max_temp has a predictor value of 32%. The Pearson correlation is 0.578.
+
+Summary:
+Figure 1.3 and the significant p-value show a strong relationship between maximum temperature and evaporation. As temperatures increase, so does the evaporation rate.The Pearson correlation, r-squared value and linear assumption tests do, however, demonstrate that the linear relationship contains some variation.
+
+There are data distribution issues with the variable, notably it fails linear regression assumptions (Figure 1.4). For this reason, the max_temp variable was log transformed (Figure 1.5). For all further analysis, the max_temp log has been log transformed (Figure 1.6).
+```{r}
+# Visualise relationship 
+maxt_plot <- ggplot(melb_tidy, aes(x = max_temp, y = evaporation)) +
+  geom_point()  +
+  geom_smooth(method = "lm", se =TRUE, color = "blue") +
+  labs(title = "Figure 1.3. Effects of Max Temp (C) on Evaporation (mm)",
+       x = "Max Temp (Degrees C)",
+       y = "Evaporation (mm)")
+maxt_plot
+
+# Inspect spread
+summary(melb_tidy$max_temp)
+sd(melb_tidy$max_temp)
+
+# Inspect relationship (can max_temp be used to predict evaporation)
+cor(melb_tidy$evaporation, melb_tidy$max_temp, method="pearson")
+sd(melb_tidy$max_temp)
+max_temp.lm <- lm(evaporation ~ max_temp, data = melb_tidy)
+summary(max_temp.lm)
+
+# Check the linear regression assumptions 
+maxt_l1 <- plot(max_temp.lm, which = 1)
+cat("Therer is a pattern and residual line is not zero. Linearity failed")
+maxt_l2 <- plot(max_temp.lm, which = 2)
+cat("There are upwards trends at the extremes. Normality failed")
+maxt_l3 <- plot(max_temp.lm, which = 3)
+cat("The line is linear, not flat. homoscedasticity failed")
+
+# Assumptions failed. Inspect the data distribution (skewdness)
+maxt_distribution <- ggplot(melb_tidy, aes(x = max_temp)) +
+  geom_histogram(col = "black", fill = "blue", bins = 30) +
+  ggtitle("Figure 1.4: Distribution of Maximum Temperature (°C)")
+maxt_distribution
+
+# Investigate effects of log on data distribution (skwedness)
+
+# Log transform max_temp
+  melb_tidy <- melb_tidy %>% mutate(max_temp_log = log(max_temp))
+
+# Inspect distribution    
+max_temp_log_dist <- ggplot(melb_tidy, aes(max_temp_log)) + geom_histogram(col = "black", fill = "blue") + ggtitle(label = "Figure 1.5 Max_Temp - Log Transformed Distribution")
+max_temp_log_dist
+
+# Re-plot Max Temp with log vs Evaporation
+maxt_log_plot <- ggplot(melb_tidy, aes(x = log(max_temp), y = evaporation)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  labs(title = "Figure 1.6. Max_Temp(log) (Degrees C) vs. Evaporation (mm)",
+       x = "log(max_temp)",
+       y = "Evaporation")
+maxt_log_plot
+
+# Re-inspect relationship with log 
+max_temp_log.lm <- lm(evaporation ~ log(max_temp), data = melb_tidy)
+summary(max_temp_log.lm)
+
+# Very minimal improvements. R-value worse. Inspect assumptions
+maxt_log_l1 <- plot(max_temp_log.lm, which = 1)
+cat("Much better, however still drops off 0 at upper end")
+maxt_log_l2 <- plot(max_temp_log.lm, which = 2)
+cat("Much better, however still a trend at upped end")
+maxt_log_l3 <- plot(max_temp_log.lm, which = 3)
+cat("There is a linear line here. Fails the homoscedasticity test")
+```
+
+# Bivariate analysis - Evaporation v Min Temp
+
+Assessment of Distribution:
+There is a strong positive linear trend from left to right evident, with the majority of results falling between 5 and 22 degrees C (Figure 1.7). There are two outliers clearly evident, both occurring above 25 Degrees C (Figure 1.8)
+
+The median is 11.4 and mean is 11.83. The lower quartile range is 8.6 and upper is 14.8, giving an IQR of 6.2. This is a high value in context to a mean of 11.83, suggesting there is high spread in the data.
+
+Assessment of Significance:
+With the p-value below 0.05, there is a statistical strong relationship between max_temp and evaporation. The r-squared value suggests the max_temp has a predictor value of 42%.The Pearson correlation is 0.6557644, which is moderate to strong.
+
+Summary:
+Figure 1.7, the Pearson correlation and the significant p-value display a strong relationship between minimum temperature and evaporation. As temperatures decrease, so does the evaporation rate. Unlike max_temp, the linear assumptions are close to passing. The r-squared value does suggest there is, however, some variation in the relationship.
+
+```{r}
+# Visualise relationship 
+mint_plot <- ggplot(melb_tidy, aes(x = min_temp, y = evaporation)) +
+  geom_point()  +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  labs(title = "Figure 1.7. Effects of Min Temp (Degrees C) on Evaporation (mm)",
+       x = "Min Temp (Degrees C)",
+       y = "Evaporation (mm)")
+mint_plot
+
+#Inspect the spread
+summary(melb_tidy$min_temp)
+sd(melb_tidy$min_temp)
+
+# Inspect relationship (can min temp be used to predict evaporation)
+cor(melb_tidy$evaporation, melb_tidy$min_temp, method="pearson")
+min_temp.lm <- lm(evaporation ~ min_temp, data = melb_tidy)
+
+# Check the linear regression assumptions 
+plot(min_temp.lm, which = 1)
+cat("The line is quite Linear")
+plot(min_temp.lm, which = 2)
+cat("The line displays evidence of normality. Slight upward trend at the upper extreme")
+plot(min_temp.lm, which = 3)
+cat("The line shows some trend. Homoscedasticity failed")
+
+# Check the distribution
+min_temp_dist <- ggplot(melb_tidy, aes(min_temp)) + geom_histogram(col = "black", fill = "blue") + ggtitle(label = "Figure 1.8 Minimum Temperature Distribution")
+min_temp_dist
+```
+# Bivariate analysis - Humidity at 9am
+
+Assessment of Distribution:
+There is a strong linear trend from left to right, with most data falling between 40 to 100% humidity (Figure 1.9). There are several outliers on the lower end of the data, all falling below the 40% humidity level (Figure 1.10). The median is 68 and mean is 88.2. The lower interquartile range is 61 and upper is 77, resulting in an IQR of 16. In relation to the mean, this is quite low, which suggests low variation in the data.
+
+Assessment of Significance:
+The p-value is very low and well below 0.05, suggesting a statistically significant relationship between humidity percentage and evaporation rates. It should, however, be noted that the R-squared value of 27% and the Pearson correlation (-0.525713) suggest the linear relationship is not perfect.
+
+Summary:
+Figure 1.9 and the significant p-value display a strong relationship between relative humidity and evaporation. As humidity decreases, the evaporation rate increases. The assessment of linear assumptions and the R-squared value do, however, suggest there is not a perfect linear relationship.
+
+
+```{r}
+# Visualise relationship 
+humid_plot <- ggplot(melb_tidy, aes(x = rh_9am, y = evaporation)) +
+  geom_point()  +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  labs(title = "Figure 1.9. Effects of Humidity(%) on Evaporation (mm)",
+       x = "Relative Humidity (%)",
+       y = "Evaporation (mm)")
+humid_plot
+
+# Inspect spread
+summary(melb_tidy$rh_9am)
+sd(melb_tidy$rh_9am)
+
+# Inspect relationship (can humidity be used to predict evaporation)
+cor(melb_tidy$evaporation, melb_tidy$rh_9am, method="pearson")
+rh_9am.lm <- lm(evaporation ~ rh_9am, data = melb_tidy)
+summary(rh_9am.lm)
+
+# Check the linear regression assumptions 
+plot(rh_9am.lm, which = 1)
+cat("The line is quite Linear")
+plot(rh_9am.lm, which = 2)
+cat("The line displays evidence of normality. There is a slight upward trend at the upper extreme")
+plot(rh_9am.lm, which = 3)
+cat("The line shows evidence of Homoscedasticity")
+
+# Check the distribution
+rh_9am_dist <- ggplot(melb_tidy, aes(rh_9am)) + geom_histogram(col = "black", fill = "blue") + ggtitle(label = "Figure 1.10. Relative Humidity Distribution")
+rh_9am_dist
+```
+
+# 2.3(a) Fit linear model to predict evaporation (in mm) on a given day in Melbourne
+
+The first linear regression equation will be-
+
+Evaporation = β0 + β1 × min_temp + β2 ×max_temp+ β3 ×rh_9am + β4 ×month + β5 × weekday+ϵ
+Where:
+
+β0 = Intercept
+β1 = min_temp
+β2 = log(max_temp)
+β3 = rh_9am
+β4 = month
+β5 = humidity:month interaction
+β6 = weekday
+```{r}
+# Fit model with all predictors in the bivariate analysis description
+evap.lm <- lm(evaporation ~ min_temp + max_temp_log + rh_9am + month + rh_9am:month + weekday, data = melb_tidy)
+# Get Quantitative p-values
+summary(evap.lm)
+# Get Categorical p-values
+anova(evap.lm)
+```
+# 2.3(b) Determine p-values of each predictor
+
+Using the summary(evap.lm), p-values for quantitative variables are 5.38e-15 (min_temp), 0.850 (max_temp), and 0.002 (rh_9am). Both min_temp and rh_9am have statistically significant p-values.
+
+Using the ANOVA function, p-values for the categorical variables are 0.087 (month), 0.217 (weekday) and 0.0003 (rh9am:month)
+```{r}
+# Quantitative
+summary(evap.lm)
+# Categorical
+anova(evap.lm)
+```
+# 2.3(c) Remove statistically insignificant predictors
+```{r}
+# Use results summaries to progressively remove statistically insignificant variables.
+
+# Highest p-value: remove max_temp
+evap_v2.lm <- lm(evaporation ~ min_temp + rh_9am + month + rh_9am:month + weekday, data = melb_tidy)
+summary(evap_v2.lm)
+anova(evap_v2.lm)
+
+# Remove next highest p-value: weekday
+evap_v3.lm <- lm(evaporation ~ min_temp + rh_9am + month + rh_9am:month, data = melb_tidy)
+anova(evap_v2.lm, evap_v3.lm)
+
+# Remove the interaction term
+evap_v4.lm <- lm(evaporation ~ min_temp + rh_9am + month , data = melb_tidy)
+anova(evap_v2.lm, evap_v3.lm, evap_v4.lm)
+```
+
+# 2.3(d) Update model to include only remaining predictors.
+
+Using the results from lm model summaries and the ANOVA function, max_temp_log (0.850) and weekday (0.217) were excluded from the model due to statistically insignificant p-values exceeding 0.05. Despite the month variable having a p-value above 0.05, it was retained in the model due to the presence of multiple individual significant values within.
+
+Interestingly, the exclusion of the interaction term rh_9am:month resulted in a statistically significant improvement in the model, with pr values falling from 0.334 in model 3 to 0.0002 in model 4 (model_comparison). This suggests model improvement in capturing variability.
+
+When compared to the bivariate analysis, min_temp and rh_9am were as predicted (statistically significant), while weekday was deemed statistically insignificant. The exclusion of max_temp was interesting. While its p-value was significant in the simple bivariate model (max_temp.lm) it was not when a multi-variate analysis was undertaken (evap_v4.lm). This suggests there are correlations being introduced with the addition of multiple predictor variables. The most likely candidate for this change would be min_temp. It is a similar form of measurement with a much higher statistical significance in this data set.
+```{r}
+evap_v4.lm <- lm(evaporation ~ min_temp + rh_9am + month , data = melb_tidy)
+model_comparison <- anova(evap.lm, evap_v2.lm, evap_v3.lm, evap_v4.lm)
+model_comparison
+```
+# 2.3(e) Model interpretation
+
+The final model is as follows: 
+
+Evaporation rate = β0 + β1 × min_temp + β2 × rh_9am + β3 × month + ϵ
+
+With, 
+  β0 being the intercept (8.363)
+  β1 being coefficient for min_temp (0.368)
+  β2 being coefficient for rh_9am (-0.096)
+  β3 being the coefficients for each month
+  ϵ  being variability within model
+
+Our intercept value is the expected evaporation rate (in millimeters) when all of our predictors are set to zero. So, zero degrees Celsius and 0% relative humidity at 9 am. For the month, we take an average month; a quick look at Figure 1 suggests something like October would be a good candidate!
+
+Next, we have our predictor coefficients. These values indicate how a one-unit change in each predictor influences our evaporation rate (the assumption made here is that the others remain constant). In our model, these 1-unit values are 0.372 for minimum temperature and -0.099 for relative humidity. For our categorical predictors, we select those on the month of interest. For example, a month in summer (February is -0.593) or winter (June is -1.720).
+
+Finally, we need to consider our p-value and model assumptions. We can see minimum temperature and relative humidity are statistically very significant whenever the model is run. However, when looking at the month we have a different picture. Here, only the months of May, June, and July have the same strong statistical relevance. So when running the model, we should acknowledge data from these months will have a greater influence on our evaporation prediction.
+
+# 2.3(f) Model diagnostics
+```{r}
+# Check there are no NAs in dataset
+any(is.na(melb_tidy))
+# Double-check
+colSums(is.na(melb_tidy))
+```
+```{r}
+# Inspect Normality
+evap_residuals = evap_v4.lm$residuals
+residuals <- hist(evap_residuals)
+# Plot the residuals
+qqnorm <- qqnorm(evap_residuals)
+# Plot the Q-Q line
+qqline <- qqline(evap_residuals)
+```
+The histogram of model residuals shows a symmetrical distribution centered around zero. This pattern is consistent with a normal distribution. The QQ plot follows the line from -2 to 1.5 before skewing upwards. This pattern suggests a generally normal but not perfect distribution. The upward deviation likely indicates the presence of outliers in the dataset.
+
+```{r}
+# Inspect Linearity and Homoscedasticity
+res <- residuals(evap_v4.lm)
+fit <- fitted(evap_v4.lm)
+# Residuals vs fitted
+res_fit <- plot(fit, res, main = "Figure 1.11. Residuals vs Fitted", xlab = "Fitted Values", ylab = "Residuals")
+lines(lowess(fit, res), col = "red")
+# Inspect Homoscedasticity
+hsced <- plot(evap_v4.lm, which = 3)
+```
+The model is not a perfect linear fit; this can be observed at the lower end (< 0) and upper end (> 8) in the fitted values (Figure 1.11). In the Scale-Location graph, residuals are again clustered between 0 and 8, indicating general homoscedasticity. Above the fitted value of 8, the trendline skews up; this indicates increased variability in the upper end of the dataset.
+
+# 2.3(g) Predictions
+```{r}
+# Evaluate confidence interval
+confint <- confint(evap_v4.lm, conf.level=0.95)
+confint
+```
+```{r}
+#1- Predict February 29, 2020. min_temp 13.8, max_temp 23.2 degrees, rh_9am 74%.
+predicted_290220 <- predict(
+  evap_v4.lm,
+  newdata = data.frame(
+    min_temp = 13.8,
+    rh_9am = 74,
+    month = factor("February", levels = levels(melb_tidy$month))
+  ),
+  interval = "confidence"
+)
+predicted_290220
+```
+```{r}
+#2- Predict December 25, 2020, min_temp 16.4, max_temp 31.9, rh_9am 57%
+predicted_251220 <- predict(
+  evap_v4.lm,
+  newdata = data.frame(
+    min_temp = 16.4,
+    rh_9am = 57,
+    month = factor("December", levels = levels(melb_tidy$month))
+  ),
+  interval = "confidence"
+)
+predicted_251220
+```
+```{r}
+#3- Predict January 13, 2020, min_temp 26.5, ma_temp 44.3, rh_9am 35%
+predicted_130120 <- predict(
+  evap_v4.lm,
+  newdata = data.frame(
+    min_temp = 26.5,
+    rh_9am = 35,
+    month = factor("January", levels = levels(melb_tidy$month))
+  ),
+  interval = "confidence"
+)
+predicted_130120
+```
+```{r}
+#4- Predict July 6, 2020, min_temp 6.8, max_temp 10.6, rh_9am 76%
+predicted_060720 <- predict(
+  evap_v4.lm,
+  newdata = data.frame(
+    min_temp = 6.8,
+    rh_9am = 76,
+    month = factor("July", levels = levels(melb_tidy$month))
+  ),
+  interval = "confidence"
+)
+predicted_060720
+```
+```{r}
+# Comparison Table
+results <- rbind(
+  predicted_060720,
+  predicted_130120,
+  predicted_251220,
+  predicted_290220
+)
+# Convert to dataframe
+results <- as.data.frame(results)
+# Create coloumns
+results <- data.frame(
+  fit = results$fit,
+  lwr = results$lwr,
+  upr = results$upr,
+  Prediction = c("06-07-2020", "13-01-2020", "25-12-2020", "29-02-2020")
+)
+# Re-order table columns
+results <- results %>%
+  select(Prediction, fit, upr, lwr)
+
+colnames(results) <- c("Date", "Evaporation_mm", "Upper_95%", "Lower_95%")
+
+# Create table, save to variable
+mwc_results <- knitr::kable(results, caption = "<h3>Table 1.1- Predicted Evaporation Rates (mm)", format = "html")
+```
+Looking at the predicted values (Table 1.1), evaporation rates range from 14.75mm to 2.03 mm.  The highest values are from January, in the middle of summer and are lowest in July, during winter. It is worth noting there is a higher variability in the January prediction (4.878036) compared to the other predictions (which range from 1.71 to 1.78).
+
+The time of year, and therefore weather conditions present play a significant role in predicting evaporation rates.
+
+# 2.3(h) Scenario: 10mm evaporation event at MWC's Cardinia Reservoir
+
+The Predictions above were run in the model using 95% confidence levels. 
+
+We can therefore predict-
+
+ 1) January 1 will trigger the 10mm evaporation rate at Cardinia Reservoir; and
+ 2) February 29, July 6 and December 25 will not trigger the 10mm evaporation rate event at Cardinia Reservoir.
+ 
+# 1. Report
+
+**Executive Summary**
+
+Melbourne Water Corporation (MWC) manages water supply to the city of Melbourne, Australia. In light of shifting weather patterns attributed to global climatic changes, previous estimations of evaporation rates used by MWC have proven unreliable under emerging conditions. 
+
+Recognizing the need for accurate predictions to secure Melbourne's future water supply stability, MWC commissioned PAC Data Analytics to develop updated models (this report). 
+
+This study utilises data supplied over a 2 year period from MWC to identify key environmental conditions influencing daily evaporation rates in Melbourne. The identified conditions (predictors) being Minimum temperature, Relative Humidity and Month of the year. Using these and linear regression modelling techniques, a predictive model was built to estimate daily evaporation rates for any given day in Melbourne.
+
+While acknowledging that a two-year dataset offers a limited snapshot of long-term climatic trends, this study underscores the ability to accurately predict evaporation rates from a small subset of environmental factors. Although the overall number of factors can be streamlined, expanding the data collection for these key conditions (Minimum Temperature, Relative Humidity, and Month) is recommended for a more robust analysis.
+
+**Methods**
+
+Data was systematically organised using principles of data taming, modelling and visualisation. This involved pre-processing, analysis of variables at the bi-variate and multi-variate levels, creation of a linear model and finally production of prediction values.       
+
+*Materials-*
+
+All data analysis, manipulation and modelling was undertaken using the following software:
+- Microsoft Excel 2019 
+- R Studio (Version 2023.09.1+494). The following packages were utilised for data analysis
+  * tidyverse
+  * caret
+  * modelr
+- Data used in the model was sourced from `melbourne.csv´, as provided by MWC
+
+*Procedure-*
+
+Data pre-processing-
+The pre-processing (tidy and taming) of the raw data from the melbounre.csv excel file followed the following steps
+1) New dataframe was created with all environmental factors outside scope of this study removed 
+2) Data values were converted to the appropriate data type
+3) Data with missing values were ommited from the dataset
+4) Additional columns for day, month and year were added.
+
+The final dataset was as follows
+```{r}
+head(melb_tidy)
+```
+
+Bivariate Analysis-
+The response variable for the purpose of the study was the variable `evaporation´. A list of six predictor variables was supplied by MWC. 2 of these were categorical (month, weekday) and the remaining three quantitative (min_temp, max_temp, rh_9am). The Bivariate analysis is detailed in full in Appendix 2.2.
+
+Each predictor was then examined against the response variable in the following order:
+1) The relationship was plotted to visually inspect trends, if any
+2) The data spread was examined
+3) The response-predictor statistical relationship was examined (can it be used to predict evaporation)
+4) The linear regression assumptions were inspected (normality, linearity and homoscedasticity).
+
+At this stage, if a statistically significant p-value was present and the linear assumptions satisfied, the predictor was assumed appropriate at the bi-variate level. If there was no statistically significant p-value, the predictor was not adopted. If the p-value was significant but the linear regression assumptions not satisfied, the following investigation was undertaken:
+
+1) Distribution was inspected to determine normality. If data was normal, the next inspections for linearity and proceeded homoscedasticity. If it failed, the variable was then logged and response-predictor relationship re-examined. 
+*Multi-variate Analysis-*
+
+The 5 predictors included in the bi-variate analysis plus an additional interaction term (upon request of the client),  were investigated to determine statistical significance in relation to determining daily evaporation rates. These were:
+
+a) Minimum temperature in degrees Celsius;
+b) Maximum temperature in degrees Celsius;
+c) Relative humidity, as measured at 9 am;
+d) Month;
+e) Interaction term for Month and relative humidity, as measured at 9am; and
+f) Day of the week.
+
+The Multi-variate analysis was then undertaken in the following steps:
+
+1a). A linear regression model was fit containing all possible predictors. The initial model expression was a follows-
+
+Evaporation = β0 + β1 × min_temp + β2 ×max_temp+ β3 × rh_9am + β4 ×month + β5 × weekday +ϵ
+
+Where,
+β0 = Intercept
+β1 = min_temp
+β2 = log(max_temp)
+β3 = rh_9am
+β4 = month
+β5 = humidity:month interaction
+β6 = weekday
+
+1b) This was then transformed into the following code in R-studio (Appendix 2.3a)
+
+evap.lm <- lm(evaporation ~ min_temp + max_temp_log + rh_9am + month + rh_9am:month + weekday, data = melb_tidy)
+
+1c) Using this linear model, p-values were obtained using summary function quantitative values and the anova() function for categorical predictors (Appendix 2.3b) 
+
+2. Using these p-values, the predictor with the highest highest p-value was then removed and the model re-run (until all remaining predictors were significant at the 5% level). (Appendix 2.3c)
+
+3. Steps 2 was repeated until only significant predictors remained.
+
+The final model and significant predictors are-
+
+Evaporation rate = β0 + β1 × min_temp + β2 × rh_9am + β3 × month + ϵ
+
+With, 
+  β0 being the intercept
+  β1 being coefficient for min_temp
+  β2 being coefficient for rh_9am
+  β3 being a coefficients for month(s)
+  ϵ  being variability within model
+
+Further final model discussion and the bi-variate/multi-variate analysis is provided in Appendix(2.3d)
+
+*Model diagnostics-*
+
+To determine model accuracy, the following diagnostics were undertaken on the final model
+
+  - Data distribution
+  - Linearaity
+  - Homoscedasticity
+  - Normality
+
+A full description can be found in Appendix 2.3(f)
+
+Predictions-
+
+The model predictions are set to a 95% confidence interval. The co-efficient 95% intervals are detailed in Appendix 2.3(g)
+
+*Limitations-*
+The model employs a data set spanning a 2-year period, which may be unsuitable for making long-term climate predictions.
+
+**Results**
+
+*Bivariate and Multi-variate Analysis*
+
+During the bivariate analysis the categorical variable *month* and quantitative variables *rh_9am* and *min_temp* were all adopted. The day of week had no statistical relationship with the response variable and was rejected.
+
+The variable max_temp was adopted, however it was log transformed in order to fit normal distribution. 
+This shift from skewed to normal distribution is shown in Figure 1.4 and Figure 1.5. The max_temp v evaporation logged relationship is shown in Figure 1.6. A full description of transformation and regression analysis is available in Appendix 2.2.   
+```{r}
+maxt_distribution
+max_temp_log_dist
+maxt_log_plot
+```
+At the multi-variate analysis level, max_temp_log (0.850) and weekday (0.217) were excluded due to statistically insignificant p-values exceeding 0.05. Despite the month variable having a p-value above 0.05, it was retained in the model due to the presence of multiple individual significant values within. The interaction term had 2 statistically significant months (March, October) however when removed, resulted in a statistically significant improvement in the model. The pr values dropped from 0.334 in model 3 to 0.0002 in model 4 (model_comparison). This suggests model improvement in capturing variability. For the added complexity of keeping and these benefits, the interaction term was removed from the model.
+
+The model statistical significance improved throughout each iteration. The final p-value is 0.0002188, which is very low. The F-statistic also improved throughout each iteration (3.3452). The RSS value slightly increased with each iteration (1738.7). This suggests some unexplained variance in the model exists.
+```{r}
+model_comparison
+```
+When compared to the bivariate analysis, min_temp and rh_9am were as predicted (statistically significant), while weekday was deemed statistically insignificant. The exclusion of max_temp was interesting. While its p-value was significant in the simple bivariate model (max_temp.lm) it was not when a multi-variate analysis was undertaken (evap_v4.lm). This suggests there are correlations being introduced with the addition of multiple predictor variables. The most likely candidate for this change would be min_temp. It is a similar form of measurement with a much higher statistical significance in this data set.
+
+*Model Interpretation-* 
+
+The final model and their 1 unit prediction values (co-efficients) were:
+
+Evaporation rate = β0 + β1 × min_temp + β2 × rh_9am + β3 × month + ϵ
+
+With, 
+  β0 being the intercept (8.363)
+  β1 being coefficient for min_temp (0.368)
+  β2 being coefficient for rh_9am (-0.096)
+  β3 being the coefficients for each month
+  ϵ  being variability within model
+
+The starting point of this model is determining the evaporation rate when all of our predictors are set to zero((intercept value). In the context of our model, when the temperature is 0 degrees Celsius and relative humidity is 0%, our evaporation rate will be 8.363 mm. (Note for the month coefficient, we just take an average month. A quick look at Figure 1 suggests something like October would be a good candidate!
+
+The next part of our model is the predictor coefficients (min_temp, rh_9am and month). These values indicate how a one-unit change in each influences our evaporation rate (the assumption made here is that the others remain constant). In our model, these 1-unit values are 0.372 for minimum temperature and -0.099 for relative humidity. For our categorical predictors, we select the month of interest. For example, a month in summer (February is -0.593) or winter (June is -1.720). A full breakdown of this and our model assumptions can be found in Appendix 2.3(e).
+")
+
+**Discussion**
+
+The linear model was applied to predict evaporations rates in Melbourne under the following 4 scenarios- 
+
+1) February 29, 2020, if this day has a minimum temperature of 13.8 degrees and reaches a maximum of 23.2 degrees, and has 74% humidity at 9am.
+
+2) December 25, 2020, if this day has a minimum temperature of 16.4 degrees and reaches a maximum of 31.9 degrees, and has 57% humidity at 9am.
+
+3) January 13, 2020, if this day has a minimum temperature of 26.5 degrees and reaches a maximum of 44.3 degrees, and has 35% humidity at 9am.
+
+4) July 6, 2020, if this day has a minimum temperature of 6.8 degrees and reaches a maximum of 10.6 degrees, and has 76% humidity at 9am.
+
+It should be noted maximum temperature values is not a desired predictor for the evap_v4.lm model. Maximum temperature was removed from the model to address introduced correlations. A full discussion on this topic can be found in Appendix 2.3d  
+
+The evap_v4.lm model predicts daily evaporation rates in mm to 95% confidence levels. The prediction, upper and lower end confidence levels are provided in Table 1.1.
+```{r}
+mwc_results
+```
+#
+Looking at the predicted values (Table 1.1), evaporation rates are 14mm January 13th, 5mm February 29, 2mm July 6 and 8mm December 25. There is a range of 12.7mm across the predicted dates (14.754350-2.038645). 
+
+The highest evaporation rates are evident in January, the middle of summer and lowest is in July, during winter. This is as would be expected in the context of the model predictors. For example, during the bi-variate analysis the following relationships were identified- 
+  - Higher minimum temperatures results in higher evaporation with an inverse relationship for lower temperatures (Figure 1.7)
+  - Lower humidity results in higher evaporation with the inverse true for higher humidity (Figure 1.9)
+  - January is the month with highest evaporation. July is the second lowest (Figure 1.1)
+
+It can therefore be concluded the time of year, and therefore weather conditions, play a significant role in determination of evaporation rates. From a water resource management perspective, if looking to minimise evaporation losses, the optimal period to focus on would be during the summer period. 
+```{r}
+mint_plot
+humid_plot
+evap_plot
+```
+
+In the second scenario of the study, MWC are interested in comparing predicted results to a 10mm evaporation trigger event at the Cardinia Reservoir. The model concludes-
+*January 13 2020 can be predicted with 95% confidence to trigger this event*
+*February 29 2020, July 6 2020 and December 25 can be predicted with 95% confidence to not trigger this event*
+
+It is important to note variability is present in the model. Although the data is generally normally distributed in the final model, the QQ plot and Scale Location graphs in Appendix 2.3f reveal outliers, particularly at the upper end of the dataset. The  presence of these outliers emphasise the importance of recognising the limitations of the model in capturing this variability. As the particular emphasis of this study is capturing climate change effects more effectively, addressing variability in the upper end of the dataset requires further exploration. Collecting additional data is a potential avenue for reducing this observed variability.
+
+**Conclusion**
+
+Using the dataset provided by Melbourne Water Corporation (MWC), a robust linear regression model (evap_v4.lm) was developed to predict daily evaporation rates in Melbourne with 95% confidence (Appendix 2.3d). From this analysis, the key predictors required for determination of evaporation rates in the model were found to be minimum temperature, relative humidity and month (Appendix 2.3c).
+
+In regards to addressing MECs key predictions concerning specific dates and environmental conditions for the year 2020, the study produced the following key findings:
+  1. Daily evaporation rates were 14mm on January 13th, 5mm February 29, 2mm July 6 and 8mm December 25 (Appendix 2.3g);
+  2. Of these days, January 13th would trigger the MWC daily 10mm evaporation event at Cardinia reservoir (Appendix 2.3h); and
+  3. Of these days, February 29, July 6 and December 25 would not trigger the MWC daily 10mm evaporation event at Cardinia reservoir (Appendix 2.3h).
+
+These use of evap_v4.lm provides valuable insights into what variables are useful for understanding and predicting daily evaporation patterns. Model predictions provide clear quantitative contributions to the decision making process of the MWC water resource management team.  
+
+
+
